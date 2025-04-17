@@ -11,7 +11,7 @@
 """
 import re
 import maya.cmds as cmds
-
+import math
 def select_objects_by_type_and_name_regex( object_type, name_pattern ):
     """
     使用正则表达式匹配指定类型的物体名称。
@@ -238,6 +238,229 @@ def connect_solver_matrix( base_name, reverse_mode=False ):
             except Exception as e:
                 print(f"× Matrix连接失败: {str(e)}")
 
+def geiChild(parent = '',type = 'joint'):
+    return cmds.listRelatives(parent,children=True,type=type,fullPath=False) or []
+
+
+def calculate_distance( pos1, pos2 ):
+    """计算三维空间两点间欧氏距离"""
+    return math.sqrt(sum((a - b) ** 2 for a, b in zip(pos1, pos2)))
+
+
+def get_world_position( node_name ):
+    """获取节点世界空间坐标"""
+    if cmds.objExists(node_name):
+        return cmds.xform(node_name,
+                          query=True,
+                          translation=True,
+                          worldSpace=True)
+    return None
+
+
+def fix_children_matrix( joint_list ):
+    """智能修复骨骼矩阵连接系统
+
+    Args:
+        joint_list (list): 需要处理的骨骼名称列表
+
+    Returns:
+        bool: 全部成功返回True，否则False
+    """
+    # ====================
+    # 参数校验
+    # ====================
+    if not isinstance(joint_list, list) or len(joint_list) == 0:
+        cmds.warning("[Error] 请输入有效的骨骼名称列表")
+        return False
+
+    all_success = True
+
+    # ====================
+    # 主处理流程
+    # ====================
+    for joint in joint_list:
+        # 存在性校验
+        if not cmds.objExists(joint):
+            cmds.warning(f"[Error] 骨骼 '{joint}' 不存在")
+            all_success = False
+            continue
+
+        # 父节点校验
+        parents = cmds.listRelatives(joint,
+                                     parent=True,
+                                     fullPath=True)
+        if not parents:
+            cmds.warning(f"[Error] 骨骼 '{joint}' 无父层级")
+            all_success = False
+            continue
+        parent_node = parents[0]
+
+        # ====================
+        # 矩阵节点查询（关键修正点）
+        # ====================
+        offset_attr = f"{joint}.offsetParentMatrix"
+
+        # 分别查询两种类型节点
+        mult_nodes = cmds.listConnections(
+            offset_attr,
+            source=True,
+            destination=False,
+            type='multMatrix',
+            skipConversionNodes=True
+        ) or []
+
+        blend_nodes = cmds.listConnections(
+            offset_attr,
+            source=True,
+            destination=False,
+            type='blendMatrix',
+            skipConversionNodes=True
+        ) or []
+
+        matrix_nodes = list(set(mult_nodes + blend_nodes))
+
+        # 节点存在性校验
+        if not matrix_nodes:
+            cmds.warning(f"[Error] {joint} 未连接矩阵节点")
+            all_success = False
+            continue
+
+        matrix_node = matrix_nodes[0]
+        node_type = cmds.nodeType(matrix_node)
+
+        # ====================
+        # multMatrix节点处理
+        # ====================
+        if node_type == 'multMatrix':
+            target_attr = f"{parent_node}.worldInverseMatrix"
+
+            # 自动定位可用插槽
+            connections = cmds.listConnections(
+                f"{matrix_node}.matrixIn",
+                source=True,
+                destination=False,
+                plugs=True
+            ) or []
+
+            # 检查现有正确连接
+            if any(conn == target_attr for conn in connections):
+                print(f"[Info] {joint} 连接已正确")
+                continue
+
+            # 寻找最高索引插槽
+            max_index = -1
+            for attr in cmds.listAttr(f"{matrix_node}.matrixIn", multi=True) or []:
+                if "[" in attr:
+                    index = int(attr.split("[")[1].split("]")[0])
+                    max_index = max(max_index, index)
+
+            # 确定目标插槽
+            target_plug = f"matrixIn[{max(max_index, 1)}]"  # 保底使用索引0
+            full_plug = f"{matrix_node}.{target_plug}"
+
+            try:
+                # 断开旧连接
+                existing = cmds.listConnections(
+                    full_plug,
+                    source=True,
+                    plugs=True
+                )
+                if existing:
+                    cmds.disconnectAttr(existing[0], full_plug)
+                    print(f"[Debug] 已断开 {existing[0]} → {full_plug}")
+
+                # 建立新连接
+                cmds.connectAttr(target_attr, full_plug, force=True)
+                cmds.xform(joint,t = [0.0,0.0,0.0])
+                print(f"[Success] {joint} multMatrix连接修复：{target_attr} → {full_plug}")
+            except Exception as e:
+                cmds.warning(f"[Error] {joint} 连接失败: {str(e)}")
+                all_success = False
+
+        # ====================
+        # blendMatrix节点处理
+        # ====================
+        elif node_type == 'blendMatrix':
+            # 步骤1：查找主关节
+            main_joint = joint.replace('Partial','')
+            if not main_joint or not cmds.objExists(main_joint):
+                cmds.warning(f"[Error] 无法找到 {joint} 对应的主关节")
+                all_success = False
+                continue
+
+            # 步骤2：连接targetMatrix
+            target_plug = f"{matrix_node}.target[0].targetMatrix"
+            try:
+                # 断开旧连接
+                existing = cmds.listConnections(target_plug, source=True, plugs=True)
+                if existing:
+                    cmds.disconnectAttr(existing[0], target_plug)
+
+                # 建立新连接
+                cmds.connectAttr(
+                    f"{main_joint}.offsetParentMatrix",
+                    target_plug,
+                    force=True
+                )
+            except Exception as e:
+                cmds.warning(f"[Error] {joint} targetMatrix连接失败: {str(e)}")
+                all_success = False
+                continue
+
+            # 步骤3：查找最近的inputMatrix候选
+            main_pos = get_world_position(main_joint)
+            if not main_pos:
+                all_success = False
+                continue
+
+            candidates = []
+            for other_joint in joint_list:
+                if other_joint in [joint, main_joint] or not cmds.objExists(other_joint):
+                    continue
+
+                other_pos = get_world_position(other_joint)
+                if other_pos:
+                    dist = calculate_distance(main_pos, other_pos)
+                    candidates.append((dist, other_joint))
+
+            if not candidates:
+                cmds.warning(f"[Error] {joint} 未找到有效候选骨骼")
+                all_success = False
+                continue
+
+            # 选择最近的候选
+            closest = min(candidates, key=lambda x: x[0])[1]
+
+            # 步骤4：连接inputMatrix
+            try:
+                input_plug = f"{matrix_node}.inputMatrix"
+                existing = cmds.listConnections(input_plug, source=True, plugs=True)
+                if existing:
+                    cmds.disconnectAttr(existing[0], input_plug)
+
+                cmds.connectAttr(
+                    f"{closest}.offsetParentMatrix",
+                    input_plug,
+                    force=True
+                )
+
+                # 设置权重参数
+                cmds.setAttr(f"{matrix_node}.target[0].weight", 1.0)
+                cmds.setAttr(f"{matrix_node}.target[0].rotateWeight", 0.5)
+
+                print(f"[Success] {joint} 连接: {main_joint} (主) + {closest} (次)")
+            except Exception as e:
+                cmds.warning(f"[Error] {joint} inputMatrix连接失败: {str(e)}")
+                all_success = False
+
+        else:
+            cmds.warning(f"[Error] {joint} 未知节点类型: {node_type}")
+            all_success = False
+
+    return all_success
+
+def reParentFix():
+    fix_children_matrix(geiChild(parent='', type='joint'))
 
 
 if __name__ == "__main__":
