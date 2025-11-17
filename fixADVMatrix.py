@@ -1,5 +1,6 @@
 #!/usr/bin/env python
-# _*_ coding:utf-8 _*_
+# _*_ coding:cp936 _*_
+
 """
 @author: GGboom
 @license: MIT
@@ -10,53 +11,154 @@
 """
 import re
 import maya.cmds as cmds
-import math
-import pymel.core as pm
-# ---------------------------
-# ğŸŒŸ å…¨å±€å˜é‡
-# ---------------------------
-limbs = ['Hip', 'Knee', 'Shoulder', 'Elbow']
-sides = ['_R', '_L']
-root_path = '|Group|DeformationSystem|root|Root_M'
-alt_root  = '|Group|DeformationSystem|Root_M'
-#Fké©±åŠ¨è½¬ä¸ºMatrixé©±åŠ¨
-def connect_solver_matrix( base_name, reverse_mode=False ):
-    """Fké©±åŠ¨ä¸Matrixé©±åŠ¨åˆ‡æ¢è¿æ¥
-    [connect_solver_matrix(i, reverse_mode=True) for i in [...]  # åå‘æ“ä½œç¤ºä¾‹
 
-    :param base_name: åŸºç¡€å…³èŠ‚åç§° (e.g. 'Ankle')
-    :param reverse_mode: False=FKè½¬Matrix, True=Matrixè½¬FK
+def select_objects_by_type_and_name_regex( object_type, name_pattern ):
     """
-    global sides
+    Ê¹ÓÃÕıÔò±í´ïÊ½Æ¥ÅäÖ¸¶¨ÀàĞÍµÄÎïÌåÃû³Æ¡£
+    select_objects_by_type_and_name_regex("joint", r"^.*Partial.*$")
+    :param object_type: str - Òª²éÕÒµÄÎïÌåÀàĞÍ£¨ÀıÈç "joint"£©
+    :param name_pattern: str - ÕıÔò±í´ïÊ½£¬ÓÃÓÚÆ¥ÅäÎïÌåÃû³Æ
+    """
+    try:
+        objects = cmds.ls(type=object_type)
+        if not objects:
+            cmds.warning("No objects of type '{}' found.".format(object_type))
+            return
+
+        pattern = re.compile(name_pattern)
+        matched_objects = [obj for obj in objects if pattern.search(obj)]
+
+        if matched_objects:
+            cmds.select(matched_objects, replace=True)
+            print("Matched objects: {}".format(", ".join(matched_objects)))
+        else:
+            cmds.warning("No objects of type '{}' matching pattern '{}' found.".format(object_type, name_pattern))
+    except Exception as e:
+        cmds.error("An error occurred: {}".format(e))
+def update_blend_matrix( bone_name ):
+    blend_matrix_node = bone_name.replace("Partial", "PartialBM")  # Ö±½ÓÌæ»» Partial Îª PartialBM
+
+    if not cmds.objExists(blend_matrix_node) or cmds.nodeType(blend_matrix_node) != "blendMatrix":
+        return None
+
+    target_matrix_attr = blend_matrix_node + ".target[0].targetMatrix"
+    input_matrix_attr = blend_matrix_node + ".inputMatrix"
+
+    if cmds.objExists(target_matrix_attr) and cmds.objExists(input_matrix_attr):
+        target_matrix = cmds.getAttr(target_matrix_attr)
+        cmds.setAttr(input_matrix_attr, *target_matrix, type="matrix")
+        return blend_matrix_node
+
+    return None
+def rebuildPartial(key = 'Partial'):
+    cmds.select(clear=True)
+    select_objects_by_type_and_name_regex("joint", r"^.*"+key+".*$")
+    for jointName in cmds.ls(sl =1):
+        for attr in ['tx','ty','tz','rx','ry','rz','sx','sy','sz','jointOrientX','jointOrientY','jointOrientZ']:
+            if attr in ['sx','sy','sz']:
+                cmds.setAttr(jointName+'.'+attr, 1)
+            else:
+                cmds.setAttr(jointName+'.'+attr, 0)
+        update_blend_matrix(jointName)
+    cmds.select(clear=True)
+
+def rebuild_bone_matrices( bone_list ):
+    """
+    ĞŞ¸´ adv ¸¨Öú¹Ç÷À¾ØÕóĞÅÏ¢
+    :param bone_list: ĞèÒªĞŞ¸´µÄ¹Ç÷ÀÁĞ±í
+    :return: ´¦Àí¹ıµÄ¹Ç÷ÀÃû³ÆÁĞ±í
+    """
+    processed_bones = []  # ÓÃÓÚ´æ´¢ÒÑ´¦ÀíµÄ¹Ç÷ÀÃû³Æ
+
+    for bone in bone_list:
+        if not cmds.objExists(bone):
+            print(f"¹Ç÷À {bone} ²»´æÔÚ£¬Ìø¹ı")
+            continue
+
+        # »ñÈ¡¹Ç÷ÀµÄËùÓĞ×Ô¶¨ÒåÊôĞÔ
+        attributes = cmds.listAttr(bone, userDefined=True) or []
+
+        # »ñÈ¡×óÓÒ±êÊ¶
+        side = "_L" if bone.endswith("_L") else "_R" if bone.endswith("_R") else None
+        if not side:
+            print(f"¹Ç÷À {bone} Ã»ÓĞ _L »ò _R ºó×º£¬Ìø¹ı")
+            continue
+
+        base_name = bone.replace(side, "")
+
+        # ´¦Àí opmrotateZ Âß¼­
+        if "opmrotateZ" in attributes and cmds.getAttr(f"{bone}.opmrotateZ") != 0.0:
+            parent_bone = cmds.listRelatives(bone, parent=True, type='joint')
+            if parent_bone:
+                parent_bone = parent_bone[0]
+                world_matrix = cmds.getAttr(f"{parent_bone}.worldMatrix[0]")
+                inv_world_matrix = cmds.getAttr(f"{bone}.worldInverseMatrix[0]")
+
+                mult_matrix_node = f"{bone}DMMMrotateZ"
+                if cmds.objExists(mult_matrix_node) and cmds.nodeType(mult_matrix_node) == 'multMatrix':
+                    cmds.setAttr(f"{mult_matrix_node}.matrixIn[1]", *world_matrix, type="matrix")
+                    cmds.setAttr(f"{mult_matrix_node}.matrixIn[2]", *inv_world_matrix, type="matrix")
+                    print(f"ĞŞÕı {mult_matrix_node} µÄ matrixIn[1] ºÍ matrixIn[2]")
+                    processed_bones.append(bone)
+        # ´¦Àí qRotateX/Y/Z Âß¼­
+        q_rotate_attrs = {"qRotateX", "qRotateY", "qRotateZ"}
+        for attr in q_rotate_attrs:
+            if attr in attributes and cmds.getAttr(f"{bone}.{attr}") != 0.0:
+                twist_node = f"{base_name}QRotateMMTwist{side}"
+                if cmds.objExists(twist_node):
+                    if cmds.getAttr(f"{twist_node}.matrixIn", size=True) > 0:
+                        source_matrix_data = cmds.getAttr(f"{twist_node}.matrixIn[0]")
+                        if source_matrix_data:
+                            inverse_matrix = cmds.matrixUtil(*source_matrix_data, q=True, inverse=1)
+                            cmds.setAttr(f"{twist_node}.matrixIn[2]", *inverse_matrix, type="matrix")
+                            print(f"ÉèÖÃ {twist_node}.matrixIn[2] Äæ¾ØÕó")
+                break  # Ò»µ©´¦ÀíÁËÒ»¸öĞı×ªÊôĞÔ£¬Ìø³öÑ­»·
+                processed_bones.append(bone)
+        # Ìí¼Ó´¦Àí¹ıµÄ¹Ç÷Àµ½ÁĞ±í
+
+    return processed_bones  # ·µ»Ø´¦Àí¹ıµÄ¹Ç÷ÀÃû³ÆÁĞ±í
+
+
+
+
+def connect_solver_matrix( base_name, reverse_mode=False ):
+    """FkÇı¶¯ÓëMatrixÇı¶¯ÇĞ»»Á¬½Ó
+    [connect_solver_matrix(i, reverse_mode=True) for i in [...]  # ·´Ïò²Ù×÷Ê¾Àı
+
+    :param base_name: »ù´¡¹Ø½ÚÃû³Æ (e.g. 'Ankle')
+    :param reverse_mode: False=FK×ªMatrix, True=Matrix×ªFK
+    """
+    sides = ["_L", "_R"]
+
     for side in sides:
         solver_node = f"{base_name}{side}_UERBFSolver"
-        # éªŒè¯è§£ç®—å™¨èŠ‚ç‚¹
+        # ÑéÖ¤½âËãÆ÷½Úµã
         if not cmds.objExists(solver_node) or cmds.nodeType(solver_node) != "UERBFSolverNode":
-            print(f"Ã— èŠ‚ç‚¹ {solver_node} ä¸å­˜åœ¨æˆ–ç±»å‹ä¸åŒ¹é…")
+            print(f"¡Á ½Úµã {solver_node} ²»´æÔÚ»òÀàĞÍ²»Æ¥Åä")
             continue
 
         if reverse_mode:
             ##########################
-            # åå‘æ¨¡å¼ï¼šMatrixè½¬FK #
+            # ·´ÏòÄ£Ê½£ºMatrix×ªFK #
             ##########################
-            # æŸ¥æ‰¾å¯èƒ½çš„MatrixæºèŠ‚ç‚¹
+            # ²éÕÒ¿ÉÄÜµÄMatrixÔ´½Úµã
             matrix_source = None
             priority_nodes = [
                 f"{base_name}QRotateMMTwist{side}",
                 f"{base_name}{side}DMMMrotateZ"
             ]
 
-            # æ£€æŸ¥å­˜åœ¨çš„MatrixæºèŠ‚ç‚¹
+            # ¼ì²é´æÔÚµÄMatrixÔ´½Úµã
             for node in priority_nodes:
                 if cmds.objExists(node):
                     matrix_source = node
                     break
 
             if not matrix_source:
-                print(f"Ã— åå‘æ¨¡å¼ï¼š{base_name}{side} æœªæ‰¾åˆ°MatrixæºèŠ‚ç‚¹")
+                print(f"¡Á ·´ÏòÄ£Ê½£º{base_name}{side} Î´ÕÒµ½MatrixÔ´½Úµã")
                 continue
 
-            # è·å–å½“å‰è¿æ¥ä¿¡æ¯
+            # »ñÈ¡µ±Ç°Á¬½ÓĞÅÏ¢
             current_conn = cmds.listConnections(
                 f"{solver_node}.inputs[0]",
                 source=True,
@@ -64,52 +166,52 @@ def connect_solver_matrix( base_name, reverse_mode=False ):
                 plugs=True
             )
 
-            # éªŒè¯å½“å‰Matrixè¿æ¥
+            # ÑéÖ¤µ±Ç°MatrixÁ¬½Ó
             if not current_conn or not current_conn[0].startswith(f"{matrix_source}.matrixSum"):
-                print(f"Ã— åå‘æ¨¡å¼ï¼š{solver_node}.inputs[0] æœªè¿æ¥åˆ° {matrix_source}.matrixSum")
+                print(f"¡Á ·´ÏòÄ£Ê½£º{solver_node}.inputs[0] Î´Á¬½Óµ½ {matrix_source}.matrixSum")
                 continue
 
-            # å‡†å¤‡FKèŠ‚ç‚¹
+            # ×¼±¸FK½Úµã
             fk_node = f"FK{base_name}{side}"
             if not cmds.objExists(fk_node) or cmds.nodeType(fk_node) != "transform":
-                print(f"Ã— åå‘æ¨¡å¼ï¼šFKèŠ‚ç‚¹ {fk_node} ä¸å­˜åœ¨æˆ–ç±»å‹é”™è¯¯")
+                print(f"¡Á ·´ÏòÄ£Ê½£ºFK½Úµã {fk_node} ²»´æÔÚ»òÀàĞÍ´íÎó")
                 continue
 
-            # æ‰§è¡Œåå‘è¿æ¥æ“ä½œ
+            # Ö´ĞĞ·´ÏòÁ¬½Ó²Ù×÷
             try:
-                # æ–­å¼€Matrixè¿æ¥
+                # ¶Ï¿ªMatrixÁ¬½Ó
                 cmds.disconnectAttr(current_conn[0], f"{solver_node}.inputs[0]")
-                # è¿æ¥FKçš„ä¸–ç•ŒçŸ©é˜µ
+                # Á¬½ÓFKµÄÊÀ½ç¾ØÕó
                 cmds.connectAttr(
                     f"{fk_node}.matrix",
                     f"{solver_node}.inputs[0]",
                     force=True
                 )
-                print(f"âˆš åå‘è¿æ¥ï¼š{fk_node}.matrix -> {solver_node}.inputs[0]")
+                print(f"¡Ì ·´ÏòÁ¬½Ó£º{fk_node}.matrix -> {solver_node}.inputs[0]")
             except Exception as e:
-                print(f"Ã— åå‘è¿æ¥å¤±è´¥: {str(e)}")
+                print(f"¡Á ·´ÏòÁ¬½ÓÊ§°Ü: {str(e)}")
 
         else:
             ########################
-            # é»˜è®¤æ¨¡å¼ï¼šFKè½¬Matrix #
+            # Ä¬ÈÏÄ£Ê½£ºFK×ªMatrix #
             ########################
-            # éªŒè¯FKèŠ‚ç‚¹
+            # ÑéÖ¤FK½Úµã
             fk_node = f"FK{base_name}{side}"
             if not cmds.objExists(fk_node) or cmds.nodeType(fk_node) != "transform":
-                print(f"Ã— é»˜è®¤æ¨¡å¼ï¼šFKèŠ‚ç‚¹ {fk_node} ä¸å­˜åœ¨æˆ–ç±»å‹é”™è¯¯")
+                print(f"¡Á Ä¬ÈÏÄ£Ê½£ºFK½Úµã {fk_node} ²»´æÔÚ»òÀàĞÍ´íÎó")
                 continue
 
-            # éªŒè¯å½“å‰FKè¿æ¥
+            # ÑéÖ¤µ±Ç°FKÁ¬½Ó
             current_conn = cmds.listConnections(
                 f"{solver_node}.inputs[0]",
                 source=True,
                 destination=False
             )
             if not current_conn or current_conn[0] != fk_node:
-                print(f"Ã— é»˜è®¤æ¨¡å¼ï¼š{solver_node}.inputs[0] æœªè¿æ¥ {fk_node}")
+                print(f"¡Á Ä¬ÈÏÄ£Ê½£º{solver_node}.inputs[0] Î´Á¬½Ó {fk_node}")
                 continue
 
-            # æŸ¥æ‰¾MatrixæºèŠ‚ç‚¹
+            # ²éÕÒMatrixÔ´½Úµã
             matrix_source = None
             priority_nodes = [
                 f"{base_name}QRotateMMTwist{side}",
@@ -122,286 +224,32 @@ def connect_solver_matrix( base_name, reverse_mode=False ):
                     break
 
             if not matrix_source:
-                print(f"Ã— é»˜è®¤æ¨¡å¼ï¼š{base_name}{side} æœªæ‰¾åˆ°MatrixæºèŠ‚ç‚¹")
+                print(f"¡Á Ä¬ÈÏÄ£Ê½£º{base_name}{side} Î´ÕÒµ½MatrixÔ´½Úµã")
                 continue
 
-            # æ‰§è¡ŒMatrixè¿æ¥
+            # Ö´ĞĞMatrixÁ¬½Ó
             try:
                 cmds.connectAttr(
                     f"{matrix_source}.matrixSum",
                     f"{solver_node}.inputs[0]",
-                    force=True  # å¼ºåˆ¶æ–­å¼€åŸæœ‰è¿æ¥
+                    force=True  # Ç¿ÖÆ¶Ï¿ªÔ­ÓĞÁ¬½Ó
                 )
-                print(f"âˆš Matrixè¿æ¥ï¼š{matrix_source}.matrixSum -> {solver_node}.inputs[0]")
+                print(f"¡Ì MatrixÁ¬½Ó£º{matrix_source}.matrixSum -> {solver_node}.inputs[0]")
             except Exception as e:
-                print(f"Ã— Matrixè¿æ¥å¤±è´¥: {str(e)}")
-def fix_matrix_connection(child_joint, new_parent):
-    for a in ("translate", "rotate", "jointOrient"):
-        try:
-            cmds.setAttr('{}.{}'.format(child_joint, a), 0, 0, 0)
-        except RuntimeError as e:
-            return str(e)
-    mult = (cmds.listConnections('{}.offsetParentMatrix'.format(child_joint),
-                                 s=True, type='multMatrix') or [None])[0]
-    if not mult:
-        return 'no multMatrix'
+                print(f"¡Á MatrixÁ¬½ÓÊ§°Ü: {str(e)}")
 
-    idx = max((int(a.split('[')[1].split(']')[0])
-               for a in cmds.listAttr('{}.matrixIn'.format(mult), multi=True) or []),
-              default=-1)
-    if idx < 0:
-        return 'no matrixIn'
 
-    plug = '{}.matrixIn[{}]'.format(mult, idx)
-    if (cmds.listConnections(plug, s=True) and
-            cmds.attributeQuery('asParent', node=child_joint, exists=True)):
-        for old in cmds.listConnections(plug, s=True, p=True) or []:
-            cmds.disconnectAttr(old, plug)
-        cmds.connectAttr('{}.worldInverseMatrix[0]'.format(new_parent), plug, f=True)
-    return 1
-def reparent_with_matrix_fix(child, new_parent):
-    cur = cmds.listRelatives(child, p=True)
-    if cur and cur[0] == new_parent:
-        return 'is parent'
-    cmds.parent(child, new_parent)
-    fix_matrix_connection(child, new_parent)
-# é‡æ„éª¨éª¼å±‚çº§
-def rebuild_twist_hierarchy():
-    global root_path, alt_root, limbs, sides
 
-    if cmds.objExists(root_path):
-        cmds.warning('// Twist hierarchy already rebuilt â€“ skip')
-        return 0
-    if not cmds.objExists(alt_root):
-        cmds.warning('// Alt Root_M not found â€“ nothing to rebuild')
-        return -1
-
-    if not cmds.objExists('|Group|DeformationSystem|root'):
-        cmds.createNode('joint', n='root', p='|Group|DeformationSystem')
-    cmds.parent(alt_root, '|Group|DeformationSystem|root')
-
-    def _record(j):
-        if not cmds.attributeQuery('asParent', node=j, exists=True):
-            cmds.addAttr(j, ln='asParent', dt='string')
-        p = cmds.listRelatives(j, p=True)
-        if p:
-            cmds.setAttr('{}.asParent'.format(j), p[0].split('|')[-1], type='string')
-
-    for limb in limbs:
-        for side in sides:
-            first = '{}Part1{}'.format(limb, side)
-            if not cmds.objExists(first):
-                continue
-            tgt = cmds.listRelatives(first, p=True)[0]
-            for i in range(1, 10):
-                j = '{}Part{}{}'.format(limb, i, side)
-                if not cmds.objExists(j):
-                    continue
-                _record(j)
-                reparent_with_matrix_fix(j, tgt)
-                c = cmds.listRelatives(j, c=True, type='joint') or []
-                if c and 'Part' not in c[0]:
-                    _record(c[0])
-                    reparent_with_matrix_fix(c[0], tgt)
-
-    cmds.warning('// Twist hierarchy rebuild completed')
-    return 1
-# è¿˜åŸéª¨éª¼å±‚çº§
-def restore_twist_hierarchy():
-    global root_path
-
-    if not cmds.objExists(root_path):
-        cmds.warning('// Not rebuilt before â€“ nothing to restore')
-        return 0
-
-    # å…³èŠ‚çŸ­åæ˜ å°„
-    short_map = {}
-    for j in cmds.ls(type='joint'):
-        short_map.setdefault(j.split('|')[-1], []).append(j)
-
-    for j in cmds.ls('DeformationSystem', dag=True, type='joint'):
-        if not cmds.attributeQuery('asParent', node=j, exists=True):
-            continue
-        p_short = cmds.getAttr('{}.asParent'.format(j)) or ''
-        tgt = (short_map.get(p_short) or [None])[0]
-        if not tgt:
-            cmds.warning('âš  missing parent {} for {}'.format(p_short, j))
-            continue
-        cur = (cmds.listRelatives(j, p=True) or [None])[0]
-        if cur != tgt:
-            try:
-                cmds.parent(j, tgt)
-                fix_matrix_connection(j, tgt)
-            except RuntimeError as e:
-                cmds.warning('restore {} failed: {}'.format(j, e))
-                continue
-        try:
-            cmds.deleteAttr(j, at='asParent')
-        except RuntimeError:
-            pass
-
-    if cmds.objExists(root_path):
-        cmds.parent(root_path, '|Group|DeformationSystem')
-        if cmds.objExists('|Group|DeformationSystem|root'):
-            cmds.delete('|Group|DeformationSystem|root')
-
-    cmds.warning('// Twist hierarchy restore completed')
-    return 1
-#å¢åŠ éª¨éª¼ç¼©æ”¾è¡°å‡
-def decay_scale(joints):
-    """
-    åŠŸèƒ½ï¼š
-    ä¼ å…¥ä¸€ç»„éª¨éª¼åˆ—è¡¨ï¼ˆtargets + driverï¼‰ï¼Œè‡ªåŠ¨å»ºç«‹ç¼©æ”¾è¡°å‡ç½‘ç»œï¼Œä½¿ç”¨ offsetParentMatrixï¼Œå¹¶æŠŠèŠ‚ç‚¹æ”¾å…¥ decayScaleSetã€‚
-
-    è¾“å…¥ï¼š
-        joints: åˆ—è¡¨ï¼Œå‰é¢ä¸º target jointsï¼Œæœ€åä¸€ä¸ªä¸ºæ§åˆ¶éª¨éª¼ã€‚
-    """
-
-    if len(joints) < 2:
-        pm.error("è¯·è‡³å°‘ä¼ å…¥2ä¸ªéª¨éª¼ï¼šå‰é¢ä¸ºç›®æ ‡éª¨éª¼ï¼Œæœ€åä¸€ä¸ªä¸ºæ§åˆ¶éª¨éª¼ã€‚")
-
-    # è½¬æ¢ PyNode
-    driver = pm.PyNode(joints[-1])
-    print(f"Driver: {driver}")
-
-    targets = [pm.PyNode(j) for j in joints[:-1]]
-    num_targets = len(targets)
-
-    # æ£€æŸ¥æˆ–åˆ›å»º set
-    if not pm.objExists("decayScaleSet"):
-        decay_set = pm.sets(name="decayScaleSet", empty=True)
-    else:
-        decay_set = pm.PyNode("decayScaleSet")
-
-    # æ„å»º decomposeMatrix èŠ‚ç‚¹ï¼Œä½¿ç”¨æ–°ç¼©å†™
-    decomp_name = f"{driver}_DM"
-    if pm.objExists(decomp_name):
-        pm.delete(decomp_name)
-    decomp_node = pm.createNode("decomposeMatrix", name=decomp_name)
-    pm.connectAttr(driver.offsetParentMatrix, decomp_node.inputMatrix, force=True)
-    pm.sets(decay_set, add=decomp_node)
-
-    for i, tgt in enumerate(targets):
-        # è®¡ç®— factor
-        factor = float(i + 1) / (num_targets + 1)
-        const_val = 1 - factor
-
-        # ä½¿ç”¨æ–°å‘½åè§„èŒƒ
-        md_name = f"{tgt}_MD"
-        pma_name = f"{tgt}_PMA"
-
-        # åˆ é™¤å·²æœ‰èŠ‚ç‚¹
-        for node_name in [md_name, pma_name]:
-            if pm.objExists(node_name):
-                pm.delete(node_name)
-
-        # multiplyDivide èŠ‚ç‚¹
-        md_node = pm.createNode("multiplyDivide", name=md_name)
-        pm.connectAttr(decomp_node.outputScale, md_node.input1, force=True)
-        md_node.input2X.set(factor)
-        md_node.input2Y.set(factor)
-        md_node.input2Z.set(factor)
-        pm.sets(decay_set, add=md_node)
-
-        # plusMinusAverage èŠ‚ç‚¹
-        pma_node = pm.createNode("plusMinusAverage", name=pma_name)
-        pm.connectAttr(md_node.output, pma_node.input3D[0], force=True)
-        pma_node.input3D[1].set(const_val, const_val, const_val)
-        pm.sets(decay_set, add=pma_node)
-
-        # åˆ†é‡è¿æ¥
-        for axis in ['X', 'Y', 'Z']:
-            scale_attr = getattr(tgt, f'scale{axis}')
-            output_attr = getattr(pma_node, f'output3D{axis.lower()}')
-
-            if pm.connectionInfo(scale_attr, isDestination=True):
-                src = pm.listConnections(scale_attr, s=True, d=False, plugs=True)
-                if src:
-                    pm.disconnectAttr(src[0], scale_attr)
-
-            pm.connectAttr(output_attr, scale_attr, force=True)
-
-    print("âœ… ç¼©æ”¾è¡°å‡èŠ‚ç‚¹ç½‘ç»œå·²å»ºç«‹å®Œæˆï¼ŒèŠ‚ç‚¹å‘½åå·²ç»Ÿä¸€ç¼©å†™ï¼Œæ‰€æœ‰èŠ‚ç‚¹å·²åŠ å…¥ decayScaleSetã€‚")
-#ä¿®æ”¹å››è‚¢åŸå§‹ç¼©æ”¾è‡³FKä¸–ç•ŒçŸ©é˜µ
-def fixFKScaleBlend(limbs, sides):
-    """
-    æ ¹æ® limb + side è‡ªåŠ¨å¤„ç† ScaleBlend èŠ‚ç‚¹çš„ scale æ›¿æ¢ï¼Œæ–­å¼€ FK è¿æ¥ï¼Œ
-    å¹¶é‡æ–°åˆ›å»º decomposeMatrix + multiplyDivide é“¾æ¥ã€‚
-
-    èŠ‚ç‚¹å‘½åè‡ªåŠ¨ç¼©å†™ï¼ˆDM, MDï¼‰ã€‚
-    """
-    for limb in limbs:
-        for side in sides:
-            blend_name = f"ScaleBlend{limb}{side}"
-            fk_name = f"FK{limb}{side}"
-
-            if not pm.objExists(blend_name):
-                print(f"âš ï¸ èŠ‚ç‚¹ {blend_name} ä¸å­˜åœ¨ï¼Œè·³è¿‡ã€‚")
-                continue
-
-            blend_node = pm.PyNode(blend_name)
-
-            if blend_node.type() != "blendColors":
-                print(f"âš ï¸ èŠ‚ç‚¹ {blend_name} ä¸æ˜¯ blendColors ç±»å‹ï¼Œè·³è¿‡ã€‚")
-                continue
-
-            if not pm.objExists(fk_name):
-                print(f"âš ï¸ èŠ‚ç‚¹ {fk_name} ä¸å­˜åœ¨ï¼Œè·³è¿‡ã€‚")
-                continue
-
-            fk_node = pm.PyNode(fk_name)
-
-            # æ–­å¼€åŸæœ‰ FK.scaleX/Y/Z ä¸ blend color2R/G/B çš„è¿æ¥
-            disconnect_pairs = [
-                (fk_node.scaleX, blend_node.color2R),
-                (fk_node.scaleY, blend_node.color2G),
-                (fk_node.scaleZ, blend_node.color2B)
-            ]
-
-            for src_attr, tgt_attr in disconnect_pairs:
-                if pm.connectionInfo(tgt_attr, isDestination=True):
-                    conn_src = pm.listConnections(tgt_attr, s=True, d=False, plugs=True)
-                    if conn_src and conn_src[0] == src_attr.name():
-                        pm.disconnectAttr(src_attr, tgt_attr)
-                        print(f"âˆš å·²æ–­å¼€ {src_attr} -> {tgt_attr}")
-
-            # åˆ›å»º decomposeMatrix èŠ‚ç‚¹
-            dm_name = f"{fk_name}_DM"
-            if pm.objExists(dm_name):
-                pm.delete(dm_name)
-            dm_node = pm.createNode("decomposeMatrix", name=dm_name)
-            pm.connectAttr(fk_node.worldMatrix[0], dm_node.inputMatrix, force=True)
-
-            # åˆ›å»º multiplyDivide èŠ‚ç‚¹
-            md_name = f"{fk_name}_MD"
-            if pm.objExists(md_name):
-                pm.delete(md_name)
-            md_node = pm.createNode("multiplyDivide", name=md_name)
-            md_node.operation.set(2)
-            # è¿æ¥
-            pm.connectAttr(dm_node.outputScale, md_node.input1, force=True)
-            pm.connectAttr("MainScaleMultiplyDivide.output", md_node.input2, force=True)
-            pm.connectAttr(md_node.output, blend_node.color2, force=True)
-
-            print(f"âœ… å·²ä¸º {blend_name} é‡å»º scale é“¾æ¥ï¼Œå¹¶è¿æ¥ decomposeMatrix + multiplyDivide èŠ‚ç‚¹ã€‚")
-
-    print("ğŸ¯ æ‰€æœ‰ limb+side å·²å¤„ç†å®Œæˆã€‚")
 if __name__ == "__main__":
-    import importlib
-    import AdvancedSkeleton.fixADVMatrix as fixADVMatrix
+    #´Î¼¶¸¨Öú¹Ç÷ÀÖØ¶¨Ïò
+    rebuildPartial(key='Partial')
 
-    importlib.reload(fixADVMatrix)
-    fixADVMatrix.rebuild_twist_hierarchy()
+    #Ö÷Òª¹Ç÷ÀÖØ¶¨Ïò
+    rebuild_bone_matrices(cmds.ls(sl =1))
 
-    for i in fixADVMatrix.limbs:
-        for side in fixADVMatrix.sides:
-            fixADVMatrix.fixFKScaleBlend(limbs, sides)
-            joints = cmds.listRelatives(i + side, c=1)
-            fixADVMatrix.decay_scale(joints)
-
-    fixADVMatrix.restore_twist_hierarchy()
-    #Fké©±åŠ¨è½¬ä¸ºMatrixé©±åŠ¨
+    #FkÇı¶¯×ªÎªMatrixÇı¶¯
     [connect_solver_matrix(i, reverse_mode=0) for i in
      ['Ankle', 'Elbow', 'Hip', 'IndexFinger1', 'IndexFinger2', 'IndexFinger3', 'Knee', 'MiddleFinger1', 'MiddleFinger2',
       'MiddleFinger3', 'PinkyFinger1', 'PinkyFinger2', 'PinkyFinger3', 'RingFinger1', 'RingFinger2', 'RingFinger3',
       'Scapula', 'Shoulder', 'ThumbFinger2', 'ThumbFinger3', 'Wrist']]
+

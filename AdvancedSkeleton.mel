@@ -37465,8 +37465,7 @@ if (`asMayaVersionAsFloat`>=2022)
 	}
 
 if ($deformer=="softMod")
-	//$return=`softMod -falloffMode 1 -falloffAroundSelection 0 -par`;
-	$return=`softMod -falloffMode 1 -falloffAroundSelection 0 `;
+	$return=`softMod -falloffMode 1 -falloffAroundSelection 0`;
 else if ($deformer=="cluster")
 	$return=`cluster -envelope 1`;
 else
@@ -52997,7 +52996,7 @@ duplicate -n TempUVAttachMesh $mesh;
 catchQuiet (`parent -w TempUVAttachMesh`);
 $tempString=`listRelatives -f -s TempUVAttachMesh`;
 for ($i=0;$i<size($tempString);$i++)
-	if (`objectType $tempString[$i]`=="mesh" || `objectType $tempString[$i]`=="mesh")
+	if (`objectType $tempString[$i]`=="mesh")
 		if (`getAttr ($tempString[$i]+".intermediateObject")`)
 			delete $tempString[$i];
 
@@ -53053,44 +53052,8 @@ for ($i=0;$i<`getAttr -s ($softMod+".falloffCurve")`;$i++)
 	$falloffCurveInterps[$i]=`getAttr ($softMod+".falloffCurve["+$i+"].falloffCurve_Interp")`;
 	}
 $scale=$falloffRadius/4.0;
-$tempString = `listConnections($softMod + ".outputGeometry")`;
-// 判断是否存在连接节点
-if( size($tempString) > 0 )
-{
-    string $firstConnection = $tempString[0];
-    // 获取第一个连接节点的类型
-    string $nodeType = `nodeType $firstConnection`;
-    // 如果直接连接的是 mesh 节点
-    if( $nodeType == "mesh" )
-    {
-        $mesh = $firstConnection;
-    }
-    // 如果连接的节点为 blendShape
-    else if( $nodeType == "blendShape" )
-    {
-        // 查询 blendShape 节点 outputGeometry 的连接节点
-        string $blendOutput[] = `listConnections($firstConnection + ".outputGeometry")`;
-        if( size($blendOutput) > 0 )
-        {
-            $mesh = $blendOutput[0];
-        }
-    }
-}
-else
-{
-    print("没有在 " + $softMod + ".outputGeometry 上找到连接的节点。\n");
-}
-
-// 输出查找到的 mesh 节点
-if( $mesh != "" )
-{
-    print("最终查找到的 mesh 节点是: " + $mesh + "\n");
-}
-else
-{
-    print("未能通过连接链找到 mesh 节点。\n");
-}
-
+$tempString=`listConnections -type mesh ($softMod+".outputGeometry")`;
+$mesh=$tempString[0];
 if ($softModPos2[0]>0)
 	{
 	$side="_L";
@@ -53461,36 +53424,22 @@ if ($type=="SoftMod")
 		}
 	$tempString=`sphere -p 0 0 0 -ax 0 1 0 -ssw 0 -esw 360 -r ($scale/1.0) -d 3 -ut 0 -tol 0.01 -s 8 -nsp 4 -ch 0`;
 	rename $tempString[0] ($name+$side);
-	print (($name+$side));
 	addAttr -ln "localOrient" -at bool -dv $local ($name+$side);
-	print ("a");
 	addAttr -ln "softModControl" -at bool -dv 1 ($name+$side);
-	print ("B");
 	sets -e -forceElement asSoftModControlShaderSG ($name+$side);
 	//sets -add "ControlSet" ($name+$side);
 	setAttr ($name+$side+"Shape.overrideEnabled") 1;
 	setAttr ($name+$side+"Shape.overrideColor") 14;
 	asSetRenderable ($name+$side+"Shape") 0;
 	createNode -n ($name+"Attach"+$side) transform;
-	print ("C");
 	parent ($name+"Attach"+$side) ($facePrefix+"CustomSystem");
-    print ("D");
+
 	//createsoftMod
-	print ("=================="+$mesh+"=============");
 	select $mesh;
-	print ("E");
-	print ($mesh);
 	$tempString=`asDeformer softMod`;
-	print ("\nNNNNNNNNNNNNN");
-	print ($tempString[0]);
-	print (($name+"SoftMod"+$side));
 	rename $tempString[0] ($name+"SoftMod"+$side);
 	rename $tempString[1] ($name+"SoftModModHandle"+$side);
-	print ("\nTTTTTTTTTTTTTTTTTT");
-	print ($tempString);
 	$tempString=`listConnections ($name+"SoftMod"+$side+".message")`;
-    print ("\nDDDDDDDDDDDDDDDDDDDD");
-    print ($tempString);
 	rename $tempString[0] ($name+"SoftModSet"+$side);
 	setAttr -type float3 ($name+"SoftModModHandle"+$side+".origin") $softModPos2[0] $softModPos2[1] $softModPos2[2];
 	setAttr ($name+"SoftMod"+$side+".falloffCenter") $softModPos2[0] $softModPos2[1] $softModPos2[2];
@@ -53509,13 +53458,13 @@ if ($type=="SoftMod")
 	setAttr ($name+"Base"+$side+"Shape.overrideColor") 17;
 	parent ($name+"Base"+$side) ($name+"Attach"+$side);
 	parent ($name+$side) ($name+"Base"+$side);
-    print ("aaaaa");
+
 	spaceLocator -n ($name+"BaseLocator"+$side);
 	parent ($name+"BaseLocator"+$side) ($name+"Base"+$side);
 	setAttr -l 1 ($name+"BaseLocator"+$side+".v") 0;
 	setAttr -l 1 ($name+"SoftModModHandle"+$side+".v") 0;
 	connectAttr ($name+"BaseLocator"+$side+"Shape.worldPosition[0]") ($name+"SoftMod"+$side+".falloffCenter");
-    print ("bbbb");
+
 	xform -ws -t $softModPos2[0] $softModPos2[1] $softModPos2[2] ($name+"Attach"+$side);
 // removing in v 6.212 as local was not attaching correctly when rotating Main, replace by a pre-align
 	if ($local)
@@ -53531,7 +53480,7 @@ if ($type=="SoftMod")
 //	parentConstraint -mo $parent ($name+"Attach"+$side);
 //	scaleConstraint $parent ($name+"Attach"+$side);
 	asParentConstraint $parent ($name+"Attach"+$side) "-mo";
-    print ("cccc");
+
 	disconnectAttr ($name+"SoftModModHandle"+$side+"Shape.softModTransforms[0]") ($name+"SoftMod"+$side+".softModXforms");
 	disconnectAttr ($name+"SoftModModHandle"+$side+".worldMatrix[0]") ($name+"SoftMod"+$side+".matrix");
 	delete ($name+"SoftModModHandle"+$side);
@@ -53551,7 +53500,7 @@ if ($type=="SoftMod")
 	addAttr -k 1 -ln falloffRadius -at double -dv 1 ($name+$side);
 	addAttr -k 1 -ln "falloffMode" -at "enum" -en "volume:surface:" -dv $falloffMode ($name+$side);
 	connectAttr ($name+$side+".falloffMode") ($name+"SoftMod"+$side+".falloffMode");
-    print ("\nDDDD");
+
 	createNode -n ($name+"MainScaleForSoftModMPD1"+$side) multiplyDivide;
 	connectAttr ($name+$side+".falloffRadius") ($name+"MainScaleForSoftModMPD1"+$side+".input1.input1X");
 	setAttr ($name+"MainScaleForSoftModMPD1"+$side+".input2.input2X") $falloffRadius;
@@ -53635,7 +53584,6 @@ if ($mirror && !`objExists CustomControlMirrorSoftModHandle` && $side=="_R")
 	{
 	//If not same mesh on other side. e.g. shoes, then find Left mesh
 	$bb=`xform -q -bb $mesh`;
-	print ($bb);
 	if ($bb[3]<($softModPos1[0]*-1))
 		{
 		$minDist=999;
@@ -53659,8 +53607,6 @@ if ($mirror && !`objExists CustomControlMirrorSoftModHandle` && $side=="_R")
 		}
 	if (`objExists closestSampler`) delete closestSampler;
 	select $mesh;
-	print ($mesh);
-	print ("\n");
 	$tempString=`asDeformer softMod`;
 	rename $tempString[0] CustomControlMirrorSoftMod;
 	rename $tempString[1] CustomControlMirrorSoftModHandle;
@@ -53694,6 +53640,7 @@ if ($mirror && !`objExists CustomControlMirrorSoftModHandle` && $side=="_R")
 		polySelectConstraint -m 3 -t 1 -d 3 -db 0 (($ssBB[5]-$ssBB[2])/2.0) -da 0 0 1 -dp 0 0 (($ssBB[5]+$ssBB[2])/2.0);
 		$tempString3=`ls -sl -fl`;
 		polySelectConstraint -m 0;
+
 		$myIntersector = `stringArrayIntersector`;
 		stringArrayIntersector -edit -intersect $tempString $myIntersector;
 		stringArrayIntersector -edit -intersect $tempString2 $myIntersector;
@@ -53702,7 +53649,7 @@ if ($mirror && !`objExists CustomControlMirrorSoftModHandle` && $side=="_R")
 		asCreateSquashController;
 		}
 	else
-	    asConvertSoftModToCustomControl $type $face;
+		asConvertSoftModToCustomControl $type $face;
 	}
 
 if (`objExists CreatingCustomControl`)
